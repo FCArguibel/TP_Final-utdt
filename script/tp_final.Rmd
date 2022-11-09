@@ -1,0 +1,551 @@
+---
+title: "Análisis inmobiliario del Área Metropolitana de Buenos Aires"
+author: "Facundo Costa de Arguibel"
+
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introducción
+El presente trabajo pretende realizar un análisis espacial de la oferta inmobiliaria del área metropolitana de Buenos Aires para los meses de mayo y junio del 2021. Para ello, se han tomado los datos de _Properati_, una plataforma web que busca facilitar la busqueda de propiedad inmobiliarias para los usuarios interesados. En este sentido, _Properati_ es una herramienta fundamental para el análisis del mercado inmobiliario ya que ofrece los datos de las propiedades que los usuarios ofrecen en alquiler o venta.
+
+Para comenzar el análisis debemos cargar los paquetes necesarios para realizar el análisis. A continuación se muestran los paquetes que se han utilizado a lo largo del análisis.
+
+```{r include=TRUE, warning=FALSE, error=FALSE}
+# Cargo las librerias que voy a usar
+library(tidyverse)
+library(readxl)
+library(lubridate)
+library(sf)
+library(scales)
+library(ggrepel)
+
+```
+
+A partir de la inclusión de los paquetes podemos cargar los dataset correspondientes. Aquí hay dos dataset a incluir en el análisis; por un lado, el dataset que contiene la información de las propiedades inmobiliarias proveninete de la página web de _Properati_; y por el otro, los datos con la información de los límites de los partidos del Área Metropolitana de Buenos Aires. Procedemos en primer lugar a cargar la información de las propiedades inmobiliaraias.
+
+```{r}
+# Cargo el dataset de las propiedades publicadas en properati
+
+#"../data/amba_properati2021.csv"
+
+prop_amba <- read.csv("https://raw.githubusercontent.com/FCArguibel/TP_Final-utdt/main/data/prop-amba20210506.csv")
+
+
+
+prop_amba <- prop_amba %>% 
+  mutate(partido1 = case_when(partido == "Luj\xe1n" ~ "Luján",
+                             partido == "General San Mart\xedn" ~ "General San Martín",
+                             partido == "Ituzaing\xf3" ~ "Ituzaingó",
+                             partido == "Esteban Echeverr\xeda" ~ "Esteban Echeverría",
+                             partido == "Ca\xf1uelas" ~ "Cañuelas",
+                             partido == "Lan\xfas" ~ "Lanús",
+                             partido == "Presidente Per\xf3n" ~ "Presidente Perón",
+                             partido == "Vicente L\xf3pez" ~ "Vicente López",
+                             partido == "Mor\xf3n" ~ "Morón",
+                             partido == "Jos\xe9 C. Paz" ~ "José C. Paz",
+                             partido == "General Rodr\xedguez" ~ "General Rodríguez",
+                             TRUE ~ partido))
+
+```
+
+Como se observa, se ha procedido a realizar una limpieza manual de la información correspondiente a la variable partido debido a que no se ha identificado el _encoding_ apropiado del archivo. También se ha cargo el dataset con la información de los límites de los partidos del Área Metropolitana de Buenos Aires (AMBA).
+
+
+## Análisis exploratorio
+Nuestro dataset contiene `r dim(prop_amba)[1]` observaciones y `r dim(prop_amba)[2]` variables. A continuación mostramo la salida que brinda Rstudio respecto a la estructura de la información.
+
+```{r}
+# Veo cual es la estructura de la base de datos y analizo
+
+str(prop_amba)
+
+```
+
+Como podemos observar, tenemos 13 variables tanto númericas como de tipo caracter.
+
+1. **created_on**: Es una variable tipo entero que hace referencia a la fecha en la que fue creada la publicación (fecha de alta). Como vemos, aún cuando es una variable tipo _date_ al levantar el dataset nos ha reconocido como un número entero.
+
+2. **provincia**: es una variable de tipo caracter que registra la provincia a la que pertenece la observación. Es decir, registra si el inmueble informado pertenece al Gobierno de la Provincia de Buenos Aires (GBA) o a la Ciudad de Buenos Aires (CABA). De esta manera, nos permite discriminar la información entre publicaciones del amba realizadas en partidos de GBA y en comunas de CABA.
+
+3. **partido**: indica el nombre del partido o comuna correspondiente. Es una variable de tipo caracter.
+
+4. **rooms**: Es una variable que describe a la propiedad e indica la cantidad de ambientes. Es una variable de tipo númerica.
+
+5. **surface_total**: esta variable indica la superficie total en metros cuadrado. Es una variable de tipo entero, aún cuando podría ser de tipo númerico (decimal).
+
+6. **surface_covered**: indica la superficie cubierta total en metros cuadrado. Es una variable de tipo númerica entero.
+
+7. **price**: esta variable indica el precio públicado en el anuncio. Es de tipo númerica entero.
+
+8. **currency**: es una variable que indica la moneda del precio públicado. Como es de esperar, es una variable tipo caracter.
+
+9. **title**: Indica el título del anuncio. Por tanto es de tipo caracter.
+
+10. **property_type**: esta variable indica el tipo de propiedad del anuncio. En este caso existen tres tipos: Casa, Departamento y PH. Es de tipo caracter.
+
+11. **operation_type**: indica el tipo de operación de la publicación, es decir si esta en alquiler o venta la propiedad. Es de tipo caracter.
+
+12. **lat**: esta variable indica la latitud del anuncio. Es de tipo númerico decimal, y nos servirá para geolocalizar el anuncio.
+
+13. **lon**: indica la longitud del anuncio. En conjunto con la anterior, nos dan la georreferenciación del anuncio.
+
+Antes de realizar cualquier análisis, es necesario hacer un resúmen estadístico de las variables incluídos en el dataset. Esto nos permite conocer de manera rápida las medidas de tendencia central de la muestra y su distribución.
+
+```{r}
+# Hago un resumen de las variables cuantitativas
+summary(prop_amba)
+
+```
+
+De aquí se observa que la función ``summary()`` nos devuelve el resultado de todas las variables en el dataset. Sin embargo, algunas de ellas no tienen interpretación porque son de tipo caracter. Tal es el caso de _operation_type_, que es una variable categórica y solo nos informan la longitud del vector. De esta manera, podemos observar que no tenemos valores _missing_ en ninguna de las variables de nuestro conjunto de datos. Todas las varialbes tienen 19.279 observaciones.
+
+Por otro lado, podemos ver que la superficie total promedio de los inmuebles publicadas es de `r round(mean(prop_amba$surface_total),1)` metros cuadrados, contiene en promedio `r round(mean(prop_amba$rooms),1)` ambientes y su precio medio es de `r label_dollar()(round(mean(prop_amba$price),1))`. Aquí debemos hacer una advertencia, ya que algunos usuarios publican sus inmuebles en moneda doméstica (pesos $) en tanto que otros lo hacen en dólares (USD). La siguiente tabla muestra la proporción de propiedades en monedas domésticas y extranjera que se han publicado en los meses de mayo y junio del 2021.
+
+```{r}
+round(prop.table(table(prop_amba$currency)), 2)
+
+```
+
+El `r (round(prop.table(table(prop_amba$currency)), 2)*100)[2]`% de los usuarios publica su inmueble en moneda extranjera, en tanto que el `r (round(prop.table(table(prop_amba$currency)), 2)*100)[1]`% lo hace en moneda doméstica. El precio para los inmuebles publicados en moneda extranjera es de `r label_dollar()(round(mean(prop_amba$price[prop_amba$currency=="USD"]),1))` dólares, en tanto que `r label_dollar()(round(mean(prop_amba$price[prop_amba$currency=="ARS"]),1))` es el precio promedio de los inmuebles publicados en moneda local.
+
+El dataset que contiene la información de los partidos de AMBA se ha cargado con el nombre ``amba``. A continuación presentamos la estructura de los datos.
+
+
+```{r}
+# Cargo el mapa de los partidos de AMBA
+#"../data/partidos_amba.geojson"
+
+amba <- st_read("https://raw.githubusercontent.com/FCArguibel/TP_Final-utdt/main/data/partidos_amba.geojson")
+# Analizo que tiene el dataset
+
+```
+
+Los datos de los partidos vienen en un archivo _geojson_, muy típico en los datos que contienen georreferencias. A su vez, el tipo de geometría que contiene el dataset es _MULTIPOLYGON_ es decir contiene líneas que conforman varios polígonos que representan a los partidos del AMBA. El sistema de coordenadas de referencia (CRS por su nombre en inglés) es _WGS 84_, es decir la manera de proyectar la información sobre el mapa es el sistema _WGS 84_ que es el más utilizado. Es muy importante tener en cuenta el _CRS_ cuando trabajamos con distintas capas que nos dan información georreferenciada.
+
+```{r}
+head(amba)
+
+```
+
+Nuestro dataset ``amba`` contiene cuatro columnas, pero la información que brinda la salida indica que existen tres ``fields``. La última columna ``geometry`` contiene información de los polígonos de cada una de las observaciones, en tanto que los tres campos son las variables que caracterizan a dicha observación. Es decir, tenemos el nombre del partido, la provincia y el área del partido en kilómetro cuadrado.
+
+Para graficar nuestro mapa del área metropolitana de Buenos Aires combinamos el uso de dos librerias, ``ggplot2`` y ``sf``. Esta última es una de las más utilizadas para mapear variables que contienen información espacial, y su siglas en inglés significan _Simple Features_.
+```{r}
+#Grafico para ver mapa
+ggplot(amba) +
+  geom_sf()
+
+```
+
+Como vemos, el código anterior solo nos ha graficado el mapa del AMBA con sus respectivos partidos y comunas. Se ve claramente la forma del Área Metropolitana de Buenos Aires. Sin embargo, podemos colorear el mapa anterior con alguna de las variables que caracterizan a las observaciones. Por ejemplo, el área en kilometro cuadrado. De esta forma, podemos ver en forma coloreada en el mapa cuales son los partidos con una mayor dimensión y cuales son los más pequeños.
+```{r}
+
+ggplot(amba) +
+  geom_sf(aes(fill = area_km2)) +
+  theme_void()
+
+```
+
+Este es el mapa que surge por defecto, y se observa que los partidos con azul más claro son aquellos que tienen una mayor dimensión en kilómetros cuadrado y los más chicos son los más oscuros. Sin embargo, podemos dar más formato al mapa introduciendo algunas capas más a _ggplot2_. Así, ``scale_fill_viridis_c()``, ``labs()`` y ``theme_void()`` nos permiten darle un mayor formato al mapa.
+```{r}
+ggplot(amba)+
+  geom_sf(aes(fill = area_km2)) +
+  scale_fill_viridis_c("Km2", option = "B", direction = -1) +
+  labs(title = "Partidos del AMBA según extensión territorial",
+       subtitle = "Área en kilómetros cuadrado para cada partido y comunica") +
+  theme_void()
+
+```
+
+Como vemos, ahora los partidos más oscuros son aquellos que presentan una mayor extensión territorial en tanto que los más claros son los más pequeños. De esta forma, los partidos más grandes en territorios se encuentran más alejado de la Ciudad Autónoma de Buenos Aires en donde predominan comunas más pequeñas. El gráfico siguiente nos muestra el orden de los partidos y comunas según extensión.
+
+```{r}
+ggplot(data= amba, aes(x= reorder(nombre, area_km2), y = area_km2)) +
+  geom_bar(stat="identity", fill = "#C92D0B") +
+  labs(x="",
+       y = "Área en km2",
+       title = "Extensión territorial de los partidos del AMBA",
+       subtitle = "Área del partido en kilómetros cuadrado") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle=90, color = "black"),
+        axis.text.y = element_text(color = "black"),
+        plot.title = element_text(face = "bold", size = 14),
+        plot.subtitle = element_text(face = "italic", size = 8),
+        axis.line.y = element_line(color = "black"),
+        axis.line.x = element_line(color = "black"),
+        axis.ticks = element_line(color = "black"),
+        panel.grid.minor = element_blank(),
+        panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dashed"))
+  
+```
+
+De aquí se desprende que el partido con mayor dimensión territorial es La Plata (`r round(amba$area_km2[amba$nombre=="La Plata"],1)` km2), seguido por Luján (`r round(amba$area_km2[amba$nombre=="Luján"],1)` km2) y San Vicente (`r round(amba$area_km2[amba$nombre=="San Vicente"],1)` km2). Muy por debajo de ellos siguen Pilar (`r round(amba$area_km2[amba$nombre=="Pilar"],)` km2), Tigre (`r round(amba$area_km2[amba$nombre=="Tigre"],1)` km2), General Rodríguez (`r round(amba$area_km2[amba$nombre=="General Rodríguez"],1)` km2), La Matanza (`r round(amba$area_km2[amba$nombre=="La Matanza"],1)` km2), Escobar (`r round(amba$area_km2[amba$nombre=="Escobar"],1)` km2) y Ezeiza (`r round(amba$area_km2[amba$nombre=="Ezeiza"],1)` km2). A su vez, las comunas pertenecientes a CABA son las más pequeñas en extensión, siendo la Comuna 2 (`r round(amba$area_km2[amba$nombre=="Comuna 2"],1)` km2), también conocida como Recoleta.
+
+Hasta el momento, solo nos dedicamos a graficar el mapa del AMBA con la información que contenia el mismo dataset. Sin embargo, también podemos cruzar la información entre dos nuestros dos dataset; a saber, la información sobre las publicaciones inmobiliarias realizadas por los usuarios entre mayo y junio de 2021 y el mapa del AMBA. De esta forma, podremos conocer en qué sector del área metropolitana hay una mayor oferta de venta de departamentos o casas; así como también de alquileres de casas y departamentos. Comencemos con algo simple.
+
+```{r}
+ggplot() +
+  geom_sf(data = amba) +
+  geom_point(data = prop_amba, aes(x = lon, y=lat))
+
+```
+
+Este mapa cruza la información contenida en los dos dataset que tenemos. Mucha información información no parece brindar el gráfico, sólo vemos una gran cantidad de publicaciones en las comunas pertenecientes a CABA y algunos partidos del GBA con poca o nula publicación. Sin embargo, también hay partidos del GBA que tienen una gran cantidad de publicaciones. Podemos clarificar la información de la siguiente manera.
+```{r}
+
+ggplot() +
+  geom_sf(data = amba, fill = NA) + 
+  geom_point(data = prop_amba, aes(x = lon, y = lat, color = provincia)) +
+  scale_colour_hue("Provincia") +
+  theme_void()
+
+```
+
+Este mapa nos permite diferenciar aquellas publicaciones que fueron realizadas en la Ciudad Autónoma de Buenos Aires y aquellas que se realizaron en el Gran Buenos Aires. Como vemos, CABA concentra una gran cantidad de publicaciones de inmuebles, ya sea para la venta o alquiler. No obstante, algunos partidos aledaños a CABA también presentan una gran cantidad de usuarios que publican sus inmuebles.
+
+Debemos notar que hemos definido dentro de la función ``geom_Sf()`` el parámetro ``fill = NA``. La implicancia de esto es que ahora los diferentes partidos del AMBA ya no se encuentran pintados del color gris, que viene por defecto. Asimismo, hemos definido un tema para el plot (``theme``) que es muy utilizado para la elaboración de mapas porque elimina los ejes del gráfico (latitud y longitud). Por úultimo, también hemos definido el parámetro ``color`` dentro de la función ``aes()`` en ``geom_point`` para que clasifique los puntos acorde a su pertenecia en la variable Provincia.
+
+ También podemos diferenciar las publicaciones según sean inmuebles en alquiler o venta.
+
+```{r}
+ggplot() +
+  geom_sf(data = amba, fill = NA) + 
+  geom_point(data = prop_amba, aes(x = lon, y = lat, color = operation_type), alpha = 0.15) +
+  scale_colour_manual("Tipo de operación", values = c("#E1311C", "#32C8CF")) +
+  theme_void()
+```
+
+Aquí se puede observar que las publicaciones referidas a alquileres de inmuebles se concentran en mayor medida en la zona de CABA y sus alrededores, con escasa participación en los partidos más alejados de dicha zona. En cambio, los inmuebles publicados como venta están más distribuidos a lo largo del AMBA con concentraciones más elevadas en la región norte.
+
+En el gráfico anterior hemos definido algunos parámetros nuevos. Por ejemplo, definimos ``alpha`` por fuera de la función ``aes()`` para lograr una transparencia de los puntos y encontrar de manera más clara en donde se concentra la mayoría según sean ventas o alquileres. Cuanto más cercano a uno es el parámetro menos transparente se hacen los puntos. Por otro lado, también incorporamos la función ```scale_color_manual()`` para pintar las observaciones. Aquí el parámetro ``values`` permite definir los colores que serán utilizados para colorear el gráfico. 
+
+## Análisis inmoviliario del AMBA
+
+El análisis anterior ha dejado en evidencia la gran concentración de puntos (publicaciones) en las zonas de CABA y sus alrededores. Es decir, existe una gran cantidad de oferta inmobiliaria en estas zonas. Sin embargo, debido a la gran concentración es difícil poder sacar información más precisa con dicho gráfico. Una manera de resolver el problema es a través de los gráficos ``heatmap``, que nos permiten dividir el plano en rectángulos, contar el número de observaciones que caen dentro y graficar los casos de cada rectángulo. Por ejemplo, podemos obtener de lo siguiente utilizando la función ``geom_bin2d``.
+```{r}
+
+ggplot() +
+  geom_sf(data = amba, fill = "white") +
+  geom_bin2d(data = prop_amba, aes(x = lon, y = lat), alpha=.85, bins=90) +
+  scale_fill_viridis_c("Anuncios", direction = -1, option = "B") +
+  labs(title = "Publicaciones de propiedades en venta y alquiler, AMBA",
+       subtitle = "Datos del AMBA para mayo y junio del 2021",
+       caption = "Elaboración propia en base a Properati") +
+  theme_void() +
+  theme(plot.title = element_text(face = "bold", size = 14),
+        plot.subtitle = element_text(face = "italic", size = 8),
+        plot.caption = element_text(size = 7),
+        legend.title = element_text(face = "bold"))
+
+```
+
+Con este gráfico vemos que la información se clarifica en mayor medida. Existe una gran cantidad de publicaciones de los usuarios en zonas de la Ciudad Autónoma de Buenos Aires, sobre todo en sectores muy específicos. Algunos sectores en CABA tienen una gran concentración de publicaciones inmobiliaria, dando cuenta de una gran actividad del sector. Las manchas más oscuras del gráfico indican un número elevado de publicaciones, y como se ve en las zonas anteriormente mencionadas existen más de 250 anuncios inmobiliarios. Por otra parte, las zonas más alejadas presentan menores avisos publicitarios, con excepción de las zonas de Vicente López, San Isidro y La Plata.
+
+Dado lo anterior, podríamos hacer un zoom a CABA para ver específicamente donde se concentran la mayor actividad de los usuarios. Para ello, simplemente incorporamos un filtro al momento de específicar los datos dentro de la función ``geom_sf()`` y ``geom_bin2d()``.
+```{r}
+ggplot() +
+  geom_sf(data = filter(amba, provincia == "CABA"), fill = "white") +
+  geom_bin2d(data = filter(prop_amba, provincia=="CABA"), aes(x = lon, y = lat), alpha=.85, bins=40) +
+  scale_fill_viridis_c("Anuncios", direction = -1, option = "B") +
+  labs(title = "Publicaciones de propiedades en venta y alquiler, CABA",
+       subtitle = "Datos de CABA para mayo y junio del 2021",
+       caption = "Elaboración propia en base a Properati") +
+  theme_void() +
+  theme(plot.title = element_text(face = "bold", size = 14),
+        plot.subtitle = element_text(face = "italic", size = 8),
+        plot.caption = element_text(size = 7),
+        legend.title = element_text(face = "bold"))
+```
+
+Este gráfico, que es un zoom del plot anterior focalizado en CABA, nos permite observar que el sector inmobiliario es muy dinámico en las Comunas 2, 13 y 14. Como observamos, la mayor cantidad de anuncios se concentra a lo largo de un corredor en la zona norte de CABA en donde se encuentran Recoleta, Palermo, Núñez, Belgrano y Colegiales. Estos sectores son muy turísticos y muy reconocidos.
+
+Otra variable interesante a mirar es el valor de las propiedades en metros cuadrado. Para ello necesitamos construir este dato, ya que en nuestro dataset no contamos con el precio de venta en metros cuadrado, una variable muy común para valuar los inmuebles. La siguiente porción de código construye esta información y lo guarda en el objeto ``venta_amba``.
+```{r echo=FALSE}
+# Unimos datos de ambos dataset
+
+venta_amba <- prop_amba %>% 
+  filter(operation_type=="Venta") %>% 
+  group_by(partido1) %>% 
+  summarise(cantidad = n(),
+            precio_m2 = mean(price/surface_covered))
+
+```
+
+Cabe realizar una aclaración respecto al código anterior y la información que se construye. Como hemos mencionado, nuestra dataset que contiene información de los anuncios de los usuarios, en cuanto a la venta o alquiler de los inmuebles, tiene publicaciones en moneda local (ARS) y en moneda extranjera (USD). Sin embargo, todas las publicaciones de inmuebles en venta están especificados en moneda extranjera por lo que el filtro en el tipo de operación elimina la posibilidad de mezclar diferentes tipos de monedas. El siguiente plot nos muestra el valor del metro cuadrado en el AMBA ordenado de menor a mayor.
+
+```{r}
+
+ggplot(venta_amba, aes(x = reorder(partido1, precio_m2), y=precio_m2, label = round(precio_m2, 1))) +
+  geom_bar(stat = "identity", fill = "#FB6107") +
+  geom_text(size = 2.5, hjust = 1, angle = 90, face = "bold") +
+  labs(y = "Precio promedio del M2",
+       x = "",
+       title = "Valor del M2 en el área metropolitana de Buenos Aires",
+       subtitle = "Valor promedio por partido entre mayo y junio del 2021") +
+  theme_minimal() + 
+  theme(plot.title = element_text(face = "bold", size = 14),
+        plot.subtitle = element_text(face = "italic", size = 9),
+        legend.title = element_text(face="bold"),
+        axis.text.x = element_text(angle = 90, color = "black"),
+        axis.text.y = element_text(color = "black"),
+        axis.line = element_line(color = "black"),
+        axis.ticks.x = element_line(color = "black"),
+        panel.grid.minor = element_blank(),
+        panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(linetype = "dashed"))
+
+
+```
+
+El plot muestra que el valor del metro cuadrado en USD es mayor en las zonas del corredor con mayor intensidad de anuncios inmobiliarios, tal como lo mostramos anteriormente. Es decir, las Comunas 1, 2, 13 y 14 presentan inmuebles relativamente más caros que las demás zonas. Las zonas con menores valores en las propiedades se encuentran alejadas de CABA, tal como José C. Paz, Berisso, Florencio Varela Hurlingham, entre otros. El valor promedio en una propiedad de la Comuna 14, es decir en Palermo, es de aproximadamente `r round((venta_amba %>% pull(precio_m2) %>% max())/(venta_amba %>% pull(precio_m2) %>% min()), 1)` veces el precio en metros cuadro de un inmueble en José C. Paz.
+
+Esta información la podemos visualizar en el mapa del AMBA. Para ello, necesitamos unir los dos dataset que tenemos por alguna variable en común. Si observamos el dataset con información de los limites de los partidos del amba, la variable ``nombre`` contiene la misma información que ``partido1`` en el dataset con información de los anuncios inmobiliarios. Ambas variables específican el nombre de los partidos. Por tanto, hacemos uso de la función que nos ofrece ``tidyverse`` llamada ``left_join``, la cual nos permite hacer agregar información de un dataset al conjunto de datos que se encuentra _a la izquierda_. Específicamos las variables _key_ en ambos dataset con el parámetro ``by``. Notar que estamos agregando información del valor (USD/m2) de los inmuebles al dataset con información espacial.
+```{r}
+
+amba_venta <- amba %>% 
+  left_join(., venta_amba, by = c("nombre" = "partido1"))
+
+```
+
+A partir de allí, podemos proceder a graficar. Antes veamos como queda la unión de los datos.
+
+```{r}
+head(amba_venta, n=5)
+```
+Aquí se puede ver que tenemos para cada nombre del partido o comuna la información correspondiente a la cantidad de anuncios inmobiliarios que se hicieron entre mayo y junio del 2021, su precio en metros cuadrados (USD/m2) y la información espacial del partido (polígono). Veamos como se ve la distribución de la variable ``precio_m2`` en el mapa del AMBA.
+```{r}
+ggplot(amba_venta) +
+  geom_sf(aes(fill = precio_m2)) +
+  scale_fill_viridis_c("U$S/m2", direction = -1, option = "B") +
+  labs(title = "Precio de los inmuebles en venta en el AMBA por partido",
+       subtitle = "Precio promedio (USD/m2) de los inmuebles - AMBA mayo y junio 2021") +
+  theme_void() +
+  theme(plot.title = element_text(face = "bold", size = 14),
+        plot.subtitle = element_text(face = "italic", size = 8),
+        legend.title = element_text(face = "bold"))
+```
+
+En este gráfico podemos ver de manera más clara la información anterior. Las propiedades con mayor valor se encuentran en las zonas con mayor dinamismo turístico tales como Recoleta, Palermo, Puerto Madero, Núñez, Belgrano, entre otras. Así también, la zona Norte del AMBA, compuesta por Vicente López, San Isidro, San Fernando y Tigre tienen precios de los inmuebles relativamente elevados.
+
+Dado que ahora tenemos un dataset con la cantidad de anuncios de venta de inmuebles, podemos ver cómo se distribuye en el mapa dicha variable. El plot siguiente muestra la información correspondiente.
+```{r}
+
+ggplot(amba_venta) +
+  geom_sf(aes(fill = cantidad)) +
+  labs(title = "Cantidad de publicaciones de venta en el AMBA por partido",
+       subtitle = "Anuncios totales entre mayo y junio del 2021 para el AMBA") +
+  scale_fill_viridis_c("Anuncios", direction = -1, option = "D") +
+  theme_void() +
+  theme(plot.title = element_text(face = "bold", size = 14),
+        plot.subtitle = element_text(face = "italic", size = 8),
+        legend.title = element_text(face = "bold"))
+
+```
+
+El gráfico nos muestra una gran cantidad de publicaciones de venta de inmuebles en las zonas de CABA y el norte del AMBA. Pero también ahora se destaca por el elevado número de anuncios el partido de La Plata. Estos números absolutos no nos permiten identificar donde hay una gran actividad inmobiliaria, ya que territorios grande podrían tener una gran cantidad de anuncios de venta de inmuebles que serían relativamente bajos si lo controlamos por su dimensión. Para ello, deberíamos controlar la cantidad de anuncios de ventas de inmuebles por la extensión territorial del partido. Ello lo hacemos de manera simple con el dataset ``amba_venta``, ya que contiene ambos tipos de información: ``cantidad`` y ``area_km2``. De esta manera, tendríamos una variable que indicaría los anuncios de venta de inmuebles por $km^2$. El siguiente bloque de código muestra cómo lo calculamos directamente dentro de la función ``geom_sf`` y expone el gráfico correspondiente.
+```{r}
+
+ggplot(amba_venta) +
+  geom_sf(aes(fill = (cantidad/area_km2)), color = NA) +
+  labs(title = "Densidad de publicaciones de Venta por Partido, AMBA",
+       subtitle = "Anuncios de venta de inmuebles por Km2 - mayo y junio 2021") +
+  scale_fill_viridis_c("Densidad", direction = -1, option = "B") +
+  theme_void() +
+  theme(plot.title = element_text(face = "bold", size = 14),
+        plot.subtitle = element_text(face = "italic", size = 8),
+        legend.title = element_text(face = "bold"))
+
+```
+
+Aquí observamos lo que anteriormente mencionabamos. Las zonas más alejadas tienen una menor actividad inmobiliaria, y el partido de La Plata, que si bien tiene una gran cantiadd de publicaciones de venta de inmuebles, no presenta un elevado comercio de inmuebles cuando lo controlamos por su extensión territorial. Las zonas con mayor dinamismo inmobiliario se encuentra en CABA, en donde el gráfico prácticamente dibuja la Ciudad Autónoma de Buenos Aires, y en el anillo que la rodea. En la zona norte de CABA encontramos Comunas con más de 60 publicaciones de venta de inmuebles por $km^2$. Esto tiene sentido, ya que la Ciudad Autónoma de Buenos Aires es el núcleo urabno con mayor dinamismo comercial del país.
+
+Dado lo anterior, podemos hacer un zoom en CABA para ver con mayor precisión la información precedente. Para ello, solo necesitamos aplicar un filtro en el dataset que incluimos en la función ``geom_sf()``, en donde deberíamos quedarnos con toda la información que corresponde a ``provincia == "CABA"``.
+```{r}
+
+ggplot() +
+  geom_sf(data = filter(amba_venta,
+                        provincia == "CABA"), aes(fill = (cantidad/area_km2)), color = NA) +
+  labs(title = "Densidad de publicaciones de venta por Comuna, CABA",
+       subtitle = "Anuncios de venta de inmuebles por Km2 - mayo y junio 2021") +
+  scale_fill_viridis_c("Densidad", option = "B", direction = -1) +
+  theme_void()+
+  theme(plot.title = element_text(face = "bold", size = 14),
+        plot.subtitle = element_text(face = "italic", size = 8),
+        legend.title = element_text(face = "bold"))
+
+
+```
+
+Aquí vemos con mayor claridad lo que sucede a nivel de CABA. Nuevamente, los sector con mayor actividad comercial (publicaciones de venta) se encuentran en la zona norte de dicha región. Particularmente, la Comuna 2 (Recolecta) presenta la mayor incidencia de anuncios de venta de inmuebles por $km^2$, seguido por la Comuna 14 (Palermo), Comuna 6 (Caballito) y Comuna 13 (Núñez, Belgrano y Colegiales).
+
+Ahora podemos quedarnos con aquellas Comunas de CABA que tienen una densidad superior a la media de `r round(mean(amba_venta$cantidad[amba_venta$provincia=="CABA"]/amba_venta$area_km2[amba_venta$provincia=="CABA"]),1)` anuncios por $km^2$.
+```{r, include=FALSE}
+
+#ggplot() + 
+ # geom_sf(data = filter(amba_venta,
+  #                      provincia == "CABA"), fill = NA) +
+  #geom_sf(data = filter(amba_venta,
+  #                      provincia == "CABA" & (cantidad/area_km2) >= mean(amba_venta$cantidad[amba_venta$provincia=="CABA"]/amba_venta$area_km2[amba_venta$provincia=="CABA"])),
+  #        aes(fill = (cantidad/area_km2)), color = NA) +
+  #labs(title = "Comunas con mayores publicaciones de venta, CABA",
+   #    subtitle = "Comunas que tienen una cantidad de publicaciones de venta\n por encima del promedio de CABA - Mayo y Junio 2021") + 
+  #scale_fill_viridis_c("Densidad", direction = -1, option = "B") +
+  #theme_void() +
+  #theme(plot.title = element_text(face="bold", size = 14, hjust = .5),
+   #     plot.subtitle = element_text(face="italic", size = 8, hjust = .5))
+
+```
+
+```{r, warning=FALSE}
+
+ggplot() + 
+  geom_sf(data = filter(amba_venta,
+                        provincia == "CABA"), fill = NA) +
+  geom_sf(data = filter(amba_venta,
+                        provincia == "CABA" & (cantidad/area_km2) >= mean(amba_venta$cantidad[amba_venta$provincia=="CABA"]/amba_venta$area_km2[amba_venta$provincia=="CABA"])),
+          aes(fill = (cantidad/area_km2)), color = NA) +
+  geom_sf_label(data = filter(amba_venta,
+                        provincia == "CABA" & (cantidad/area_km2) >= mean(amba_venta$cantidad[amba_venta$provincia=="CABA"]/amba_venta$area_km2[amba_venta$provincia=="CABA"])),
+                aes(label = nombre), size = 1.8) +
+  labs(title = "Comunas con mayores publicaciones de venta, CABA",
+       subtitle = "Comunas que tienen una cantidad de publicaciones de venta por encima\n del promedio de CABA - Mayo y Junio 2021") + 
+  scale_fill_viridis_c("Densidad", direction = -1, option = "B") +
+  theme_void() +
+  theme(plot.title = element_text(face = "bold", size = 14),
+        plot.subtitle = element_text(face = "italic", size = 8),
+        legend.title = element_text(face = "bold"))
+
+```
+
+De aquí vemos que la Comuna 2 (Recoleta) tiene una incidencia de más de 110 anuncio de ventas de inmuebles por cada kilómetro cuadrado. Este dato es muy superior a la Comuna vecina (Comuna 14 -Palermo) y la Comuna 6 (Caballito).
+
+
+### Análisis por tipo de propiedad
+Así como hemos analizado la oferta inmobiliaria por tipo de operación, podemos hacerlo por tipo de propiedad. Es decir, según los anuncios de los usuarios sean de departamentos, casas o PH. El siguiente gráfico muestra la distribución de inmuebles según el tipo y el partido.
+```{r}
+datos_amba_tipo <- prop_amba %>% 
+  group_by(partido1, property_type) %>% 
+  summarise(cantidad = n())
+
+ggplot(datos_amba_tipo, aes(partido1, cantidad, fill = property_type)) +
+  geom_bar(stat="identity", position = "dodge") +
+  labs(title = "Publicaciones de inmuebles según el tipo de inmueble",
+       subtitle = "Anuncios por partido entre mayo y junio 2021 - AMBA") +
+  theme_void() +
+  theme(plot.title = element_text(face = "bold", size = 14, hjust = .5),
+        plot.subtitle = element_text(face = "italic", size = 8, hjust = .5),
+        axis.text.x = element_text(angle = 90),
+        legend.position = "bottom",
+        legend.direction = "horizontal",
+        legend.title = element_blank())
+
+
+```
+
+Como se observa hay una gran cantidad de anuncios de departamentos, ya se para la venta o alquiler, en CABA en tanto que una mayor presencia de publicaciones de casas en las zonas alejadas de la Ciudad Autónoma de Buenos Aires. Los PH no tienen una gran incidencia en comparación con los demás casos. Podemos visualizar la información en el mapa del amba. Para ello, procedemos a calcular en primer lugar qué es lo que más se publica en cada partido. Es decir, si en el partido en cuestión predomina el anuncio de casas o departamentos, y luego trasladamos la información a un mapa para identificar los partidos especializados en cada uno de los casos.
+
+```{r}
+datos_amba_tipo_max <- datos_amba_tipo %>% 
+  filter(cantidad == max(cantidad))
+
+
+datos_amba_tipo_max <- amba %>% 
+  left_join(., datos_amba_tipo_max, by = c("nombre" = "partido1"))
+
+```
+
+El gráfico siguiente nos muestra en qué partido se publican con mayor frecuencia casas y departamentos.
+```{r}
+ggplot(datos_amba_tipo_max) +
+  geom_sf(aes(fill = property_type)) +
+  scale_fill_viridis_d("Tipo de propiedad", option = "B") +
+  labs(title = "Tipo de inmueble publicado con mayor frencuencia, AMBA",
+       subtitle = "Cantidad máxima de casas o departamentos según el partido entre mayo y junio 2021") +
+  theme_void() +
+  theme(plot.title = element_text(face = "bold", size = 14),
+        plot.subtitle = element_text(face = "italic", size = 8),
+        legend.title = element_text(face = "bold"))
+
+```
+
+Aquí se puede observar que la zona de CABA y los partidos que la rodean, con excepción de San Isidro, predominan las publicaciones de departamentos ya sean para alquilar o vender; mientras que las zonas del noroeste y suroeste del AMBA están determinadas por anuncios de usuarios que desean alquilar o vender casas. Esto tiene sentido ya que las afueras de la región del AMBA tiene una menor cantidad de edificios y desarrollo urbano que la zona de CABA.
+
+A su vez, para poder comparar entre los diferentes partidos debemos corregir por la extensión territorial de estos. El gráfico siguiente nos muestra la densidad de publicaciones de Casas para el AMBA.
+```{r}
+
+datos_amba_tipo <- amba %>% 
+  left_join(., datos_amba_tipo, by = c("nombre"="partido1"))
+
+ggplot() +
+  geom_sf(data = filter(datos_amba_tipo, property_type=="Casa"), aes(fill=(cantidad/area_km2))) +
+  scale_fill_viridis_c("Anuncios/km2", direction=-1, option = "B") +
+  labs(title = "Densidad de publicaciones de Casas por Partido, AMBA",
+       subtitle = "Publicaciones de casas por km2 en el periodo mayo y junio 2021") +
+  theme_void() +
+  theme(plot.title = element_text(face = "bold", size = 14),
+        plot.subtitle = element_text(face = "italic", size = 8),
+        legend.title = element_text(face = "bold"))
+
+
+```
+
+Esta imagen contrasta con el gráfico anterior. Una vez que controlamos por la extensión territorial, vemos nuevamente que la zona norte del AMBA y CABA predominan en la actividad inmobiliaria. Ahora vemos que Vicente López, San Isidro y San Fernando tienen una gran densidad de publicaciones de casas para alquilar o vender. Asimismo, vemos que dentro de CABA hay comunas que presentan una densidad elevada. Los partidos de Tigre, Escobar, Pilar, Malvinas Argentina, San Miguel, entre otros partidos de la zona norte, también presentan muchos anuncios por $km^2$.
+
+Podemos hacer un zoom a la Ciudad Autónoma de Buenos Aires para identificar con mayor precisión aquellas zonas con mayores anuncios de casas para alquilar o vender. El siguiente plot muestra esta información.
+```{r, warning=FALSE}
+ggplot() +
+  geom_sf(data = filter(datos_amba_tipo, property_type=="Casa", provincia == "CABA"), aes(fill=(cantidad/area_km2))) +
+  geom_sf_label(data = filter(datos_amba_tipo,
+                        provincia == "CABA"),
+                aes(label = nombre), size = 2) +
+  scale_fill_viridis_c("Densidad", direction=-1, option = "B") +
+  labs(title = "Densidad de publicaciones de casas por comuna, CABA",
+       subtitle = "Cantidad de publicaciones por km2 - Mayo y junio 2021") +
+  theme_void() +
+  theme(plot.title = element_text(face = "bold", size = 14),
+        plot.subtitle = element_text(face = "italic", size = 8),
+        legend.title = element_text(face = "bold"))
+```
+
+Como se observa, la región noroeste de CABA es la que mayor actividad inmobiliaria en cuanto a casas tiene. La Comuna 12 (Villa Urquiza y Villa Pueyrredón) es la que mayor densidad de publicaciones de casas por $km^2$ tiene; y le siguen la Comuna 11 (Villa General Mitre, Villa Devoto, Villa del Parque y Villa Santa Rita), la Comuna 13 (Colegiales) y 10 (Villa Real, Monte Castro, Versalles, Floresta, Vélez Sarsfield y Villa Luro). Contrario a la información que se ha expuesto anteriormente, en donde la región este de CABA tenia una gran densidad. Por tanto, es de esperar que estas últimas regiones tengan una mayor densidad en las publicaciones de departamentos.
+
+El gráfico siguiente nos muestra la distribución de la densidad de departamentos publicados en la región del AMBA.
+```{r}
+ggplot() +
+  geom_sf(data = filter(datos_amba_tipo, property_type=="Departamento"), aes(fill=(cantidad/area_km2))) +
+  scale_fill_viridis_c("Densidad", direction=-1, option = "B") +
+  labs(title = "Densidad de publicaciones de Departamento por Partido, AMBA",
+       subtitle = "Cantidad de publicaciones por km2 - Mayo y junio 2021") +
+  theme_void() +
+  theme(plot.title = element_text(face = "bold", size = 14),
+        plot.subtitle = element_text(face = "italic", size = 8),
+        legend.title = element_text(face = "bold"))
+```
+
+Las regiones más alejadas de CABA no tienen una actividad inmobiliaria concentrada en el alquiler o venta de departamentos, más bien este tipo de propiedad suele comercializarse en la Ciudad Autónoma de Buenos Aires. Como bien hemos mostrado anteriormente, dentro de CABA hay Comunas en donde mayormente se alquilan o venden casas por lo que deberíamos esperar que las zonas cercanas al este de Caba concentren la mayor oferta de departamentos. El gráfico siguiente nos muestra esta información con un zoom en CABA.
+```{r}
+ggplot() +
+  geom_sf(data = filter(datos_amba_tipo, property_type=="Departamento", provincia == "CABA"), aes(fill=(cantidad/area_km2))) +
+  geom_sf_label(data = filter(datos_amba_tipo,
+                        provincia == "CABA"),
+                aes(label = nombre), size = 2) +
+  scale_fill_viridis_c("Densidad", direction=-1, option = "B") +
+  labs(title = "Densidad de publicaciones de Departamentos por comuna, CABA",
+       subtitle = "Cantidad de publicaciones por km2 - Mayo y junio 2021") +
+  theme_void()
+
+
+```
+
+Como vemos, y como era de esperar, las Comunas 2, 14 y 6 presentan una gran densidad en cuanto publicaciones de ventas o alquiler de departamentos. En estas zonas se comercializan mayormente departamentos, y esto tiene sentido debido al desarrollo urbano de estas regiones. Por otro lado, y dado la información que hemos brindado anteriormente cuando analizamos las ventas, este gráfico es muy similar al que muestra las ventas de inmuebles en CABA. De esta forma, podríamos decir que el corredor que anteriormente habíamos específicado, compuesto por la Comuna 2, 14 y 13 tiene una actividad inmobiliaria mayormente concentrada en la venta de departamentos. Una excepción a esto es la Comuna 13 (Colegiales), ya que también presenta una gran densidad de publicaciones de casas. Por tanto, se podría mencionar que Colegiales presenta una gran actividad inmobiliaria, sea de casas o departamentos.
+
+## Conclusión
+La actividad inmobiliaria es una de las más dinámicas en las grandes ciudades. Su análisis nos permite identificar las zonas con mayor actividad así como también comparar los precios de los inmuebles. Como hemos visto, la mayor actividad inmobiliaria se concentra en las zonas de CABA, particularmente en las Comunas del Este de la Ciudad Autónoma. Aquí predominan las ventas o alquileres de departamentos, y los precios $USD/m^2$ son los más elevados del AMBA. Por otro lado, la actividad inmobiliaria relacionada con la venta o alquiler de casas se da particularmente en las regiones del Noroeste y Suroeste del AMBA. Esto tiene sentido, ya que el desarrollo urbanistico y la actividad comercial es menor.
+
+
+
